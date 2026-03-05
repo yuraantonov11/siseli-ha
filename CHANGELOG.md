@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.4] - 2026-03-05
+### Fixed
+- Fixed `unbound variable` crash in `run.sh` by reordering config export.
+- Automatic network interface detection (`conf.iface`) for Scapy ARP operations.
+- Suppressed non-fatal errors when setting `ip_forward` on read-only filesystems.
+
 ## [1.2.3] - 2026-03-05
 ### Added
 - Verbose Debug Mode for network diagnostics.
