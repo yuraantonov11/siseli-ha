@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.1] - 2026-03-05
+### Added
+- Detailed network and capability diagnostics in `run.sh`.
+- `libcap` and `iproute2` packages for advanced network troubleshooting.
+- Redirection error logging to `/tmp/ipt_err`.
+
 ## [1.2.0] - 2026-03-05
 ### Fixed
 - Switched to `iptables-legacy` for better compatibility with Home Assistant OS.

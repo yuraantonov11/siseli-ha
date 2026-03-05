@@ -1,8 +1,8 @@
 ARG BUILD_FROM=ghcr.io/hassio-addons/base:14.0.0
 FROM $BUILD_FROM
 
-# Install system dependencies including dos2unix to fix line endings
-RUN apk add --no-cache python3 py3-pip iptables libpcap-dev dos2unix
+# Install system dependencies
+RUN apk add --no-cache python3 py3-pip iptables libpcap-dev dos2unix libcap iproute2
 
 # Install Python libraries with the flag for modern Alpine (PEP 668)
 RUN pip3 install --no-cache-dir --break-system-packages paho-mqtt scapy

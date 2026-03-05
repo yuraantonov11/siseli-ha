@@ -1,13 +1,22 @@
 #!/usr/bin/with-contenv bashio
 
-echo "Initializing PowMr Network Interceptor..."
+echo "--- PowMr Bridge Diagnostic Start ---"
+echo "Current user: $(id)"
+echo "Capabilities: $(capsh --print 2>/dev/null || echo 'capsh not found')"
+echo "Network Interface Info:"
+ip addr show | grep -E 'eth0|wlan0|end0' || ip addr show
 
-# Redirect incoming traffic from 1883 to our local port 18899
-# This is safe and doesn't require system-wide IP forwarding
-# Використовуємо legacy-версію iptables, яка гарантовано працює в HA
-iptables-legacy -t nat -A PREROUTING -p tcp --dport 1883 -j REDIRECT --to-port 18899 || \
-iptables -t nat -A PREROUTING -p tcp --dport 1883 -j REDIRECT --to-port 18899 || \
-echo "CRITICAL WARNING: iptables failed! You MUST turn OFF Protection Mode in HA Add-on settings."
+echo "Checking iptables availability..."
+which iptables-legacy || echo "iptables-legacy not found"
+which iptables || echo "iptables not found"
+
+# Спроба налаштувати REDIRECT
+echo "Setting up port redirection (1883 -> 18899)..."
+iptables-legacy -t nat -A PREROUTING -p tcp --dport 1883 -j REDIRECT --to-port 18899 2>/tmp/ipt_err || \
+iptables -t nat -A PREROUTING -p tcp --dport 1883 -j REDIRECT --to-port 18899 2>>/tmp/ipt_err || \
+echo "CRITICAL: iptables failed. Error: $(cat /tmp/ipt_err)"
+
+echo "--- Diagnostic End ---"
 
 # Export HA MQTT settings
 export MQTT_HOST=$(bashio::config 'mqtt_host' 'core-mosquitto')
@@ -22,6 +31,5 @@ export LISTEN_PORT=$(bashio::config 'LISTEN_PORT' '18899')
 export INVERTER_IP=$(bashio::config 'INVERTER_IP' '')
 export ROUTER_IP=$(bashio::config 'ROUTER_IP' '')
 
-echo "Starting PowMr HA Bridge with ARP Spoofing..."
-# Прапорець -u вимикає буферизацію, щоб ми бачили всі помилки миттєво
+echo "Starting PowMr HA Bridge..."
 python3 -u /app/powmr_bridge.py
