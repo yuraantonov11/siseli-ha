@@ -1,9 +1,11 @@
 ARG BUILD_FROM=ghcr.io/hassio-addons/base:14.0.0
 FROM $BUILD_FROM
 
-# Install dependencies including dos2unix to fix line endings
+# Install system dependencies including dos2unix to fix line endings
 RUN apk add --no-cache python3 py3-pip iptables libpcap-dev dos2unix
-RUN pip3 install paho-mqtt scapy
+
+# Install Python libraries with the flag for modern Alpine (PEP 668)
+RUN pip3 install --no-cache-dir --break-system-packages paho-mqtt scapy
 
 # Set working directory
 WORKDIR /app

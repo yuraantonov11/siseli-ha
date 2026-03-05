@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.2] - 2026-03-05
+### Fixed
+- Docker build failure caused by PEP 668 in modern Alpine Linux (Home Assistant base images).
+- Added `--break-system-packages` flag to `pip3 install` to allow global package installation in containers.
+
 ## [1.1.1] - 2026-03-05
 ### Added
 - English documentation and README.
