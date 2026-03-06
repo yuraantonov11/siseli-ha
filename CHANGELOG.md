@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.1] - 2026-03-05
+### Added
+- **Router-Assisted Mode**: Optimized the bridge to work with external port redirection (e.g., from OpenWrt).
+- Restored active proxy server on port 18899.
+- Removed ARP spoofing and sniffing logic to improve stability when using router-level NAT.
+
 ## [1.4.0] - 2026-03-05
 ### Changed
 - Switched to **Direct Packet Capture Mode** using Scapy Sniffing.
