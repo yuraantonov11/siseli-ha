@@ -1,6 +1,6 @@
 # ☀️ PowMr Inverter Home Assistant Bridge (Siseli Interceptor)
 
-[![Version](https://img.shields.io/badge/version-1.1.1-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.9.0-blue.svg)](CHANGELOG.md)
 [![HA Add-on](https://img.shields.io/badge/Home%20Assistant-Add--on-green.svg)](https://www.home-assistant.io/)
 
 Integrate PowMr inverters (RWB1, 6.2kW, and similar models) into Home Assistant without external clouds. This bridge intercepts the MQTT traffic sent to the Siseli cloud, decodes it, and creates sensors via MQTT Auto-Discovery.
