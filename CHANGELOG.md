@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.8.0] - 2026-03-05
+### Added
+- **Full Autonomous L2 Bridge**: Implemented a software switch that routes ALL inverter traffic (DNS, NTP, etc.) through HA.
+- Fixed inverter "no internet" issue by manually forwarding non-MQTT packets to the real router.
+- Added `DROP` rules in HA kernel to prevent system interference with bridged packets.
+- Real-time Ethernet frame routing using Scapy.
+
 ## [1.7.0] - 2026-03-05
 ### Added
 - **Autonomous Proxy Mode (MITM)**: Switched to a full Man-in-the-Middle proxy.

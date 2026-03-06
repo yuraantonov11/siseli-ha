@@ -8,7 +8,7 @@ import logging
 import warnings
 import paho.mqtt.client as mqtt
 from datetime import datetime
-from scapy.all import ARP, Ether, sendp, getmacbyip
+from scapy.all import sniff, ARP, Ether, sendp, getmacbyip, IP, TCP, Raw
 
 # Silence warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -17,21 +17,22 @@ logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 # === CONFIG ===
 INVERTER_IP = os.getenv('INVERTER_IP', '192.168.1.139')
 ROUTER_IP = os.getenv('ROUTER_IP', '192.168.1.1')
-CLOUD_IP = os.getenv('TARGET_HOST', '8.212.18.157')
-CLOUD_PORT = 1883
-LISTEN_PORT = 18899
+TARGET_HOST = os.getenv('TARGET_HOST', '8.212.18.157')
 
-# --- HA MQTT ---
 HA_BROKER = os.getenv('MQTT_HOST', 'core-mosquitto')
 HA_PORT = int(os.getenv('MQTT_PORT', 1883))
 HA_USER = os.getenv('MQTT_USER', '')
 HA_PASS = os.getenv('MQTT_PASSWORD', '')
+
 DEVICE_ID = "powmr_rwb1"
 STATE_TOPIC = f"powmr/{DEVICE_ID}/state"
 
+INV_MAC = None
+ROUTER_MAC = None
+
+# --- MQTT ---
 ha_client = mqtt.Client()
-if HA_USER and HA_PASS:
-    ha_client.username_pw_set(HA_USER, HA_PASS)
+if HA_USER and HA_PASS: ha_client.username_pw_set(HA_USER, HA_PASS)
 
 def connect_ha_mqtt():
     try:
@@ -65,13 +66,14 @@ def publish_discovery():
     for key, data in sensors.items():
         topic = f"homeassistant/sensor/{DEVICE_ID}/{key}/config"
         payload = {
-            "name": f"PowMr {data[0]}", "state_topic": STATE_TOPIC, 
-            "value_template": f"{{{{ value_json.{key} }}}}", "unit_of_measurement": data[1], 
-            "device_class": data[2], "icon": data[3], "unique_id": f"{DEVICE_ID}_{key}", 
+            "name": f"PowMr {data[0]}", "state_topic": STATE_TOPIC,
+            "value_template": f"{{{{ value_json.{key} }}}}", "unit_of_measurement": data[1],
+            "device_class": data[2], "icon": data[3], "unique_id": f"{DEVICE_ID}_{key}",
             "device": {"identifiers": [DEVICE_ID], "name": "PowMr 6.2kW Inverter", "manufacturer": "PowMr"}
         }
         ha_client.publish(topic, json.dumps(payload), retain=True)
 
+# --- PARSER ---
 class SolarParser:
     @staticmethod
     def parse_payload(payload_bytes):
@@ -109,54 +111,48 @@ class SolarParser:
                         state["bat_temp"] = r[41]
             if state:
                 ha_client.publish(STATE_TOPIC, json.dumps(state))
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] ➡️ Data duplicated to HA.")
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] ➡️ Data duplicated to HA: {len(state)} params.")
         except: pass
-
-# --- PROXY ---
-async def forward_stream(reader, writer, is_inverter=False):
-    try:
-        while True:
-            data = await reader.read(8192)
-            if not data: break
-            if is_inverter: SolarParser.parse_payload(data)
-            writer.write(data)
-            await writer.drain()
-    except Exception: pass
-    finally: writer.close()
-
-async def handle_client(inverter_reader, inverter_writer):
-    peer = inverter_writer.get_extra_info('peername')
-    print(f"[PROXY] Connection from {peer}. Establishing bridge to Cloud...")
-    try:
-        cloud_reader, cloud_writer = await asyncio.open_connection(CLOUD_IP, CLOUD_PORT)
-        print("[PROXY] Bridge established. Forwarding traffic.")
-        await asyncio.gather(
-            forward_stream(inverter_reader, cloud_writer, is_inverter=True),
-            forward_stream(cloud_reader, inverter_writer, is_inverter=False)
-        )
-    except Exception as e: print(f"[PROXY ERROR] {e}")
-    finally: inverter_writer.close()
 
 # --- ARP SPOOFER ---
 class ArpSpoofer:
     def run(self):
-        t_mac = getmacbyip(INVERTER_IP)
-        g_mac = getmacbyip(ROUTER_IP)
-        if not t_mac or not g_mac:
-            print(f"[ARP ERROR] Could not find MAC for {INVERTER_IP} or {ROUTER_IP}")
-            return
+        global INV_MAC, ROUTER_MAC
+        while not INV_MAC or not ROUTER_MAC:
+            INV_MAC = getmacbyip(INVERTER_IP)
+            ROUTER_MAC = getmacbyip(ROUTER_IP)
+            time.sleep(1)
         print(f"[ARP] Interception ACTIVE: {INVERTER_IP} <-> {ROUTER_IP}")
         while True:
-            sendp(Ether(dst=t_mac)/ARP(op=2, pdst=INVERTER_IP, psrc=ROUTER_IP, hwdst=t_mac), verbose=False)
-            sendp(Ether(dst=g_mac)/ARP(op=2, pdst=ROUTER_IP, psrc=INVERTER_IP, hwdst=g_mac), verbose=False)
+            sendp(Ether(dst=INV_MAC)/ARP(op=2, pdst=INVERTER_IP, psrc=ROUTER_IP, hwdst=INV_MAC), verbose=False)
+            sendp(Ether(dst=ROUTER_MAC)/ARP(op=2, pdst=ROUTER_IP, psrc=INVERTER_IP, hwdst=ROUTER_MAC), verbose=False)
             time.sleep(2)
 
-# --- MAIN ---
-async def main():
+# --- L2 BRIDGE ---
+def packet_callback(pkt):
+    if not IP in pkt or not Ether in pkt: return
+    src_mac, src_ip, dst_ip = pkt[Ether].src, pkt[IP].src, pkt[IP].dst
+
+    # 1. Packet FROM Inverter
+    if src_ip == INVERTER_IP and src_mac == INV_MAC:
+        # Catch MQTT for HA
+        if TCP in pkt and pkt[TCP].dport == 1883 and dst_ip == TARGET_HOST:
+            if Raw in pkt:
+                payload = pkt[Raw].load
+                if len(payload) > 0 and (payload[0] & 0xF0) == 0x30:
+                    SolarParser.parse_payload(payload)
+        # Forward everything else to Router
+        fwd_pkt = Ether(dst=ROUTER_MAC) / pkt[IP]
+        sendp(fwd_pkt, verbose=False)
+        
+    # 2. Packet TO Inverter (from Router/Cloud)
+    elif dst_ip == INVERTER_IP and src_mac == ROUTER_MAC:
+        fwd_pkt = Ether(dst=INV_MAC) / pkt[IP]
+        sendp(fwd_pkt, verbose=False)
+
+if __name__ == "__main__":
     connect_ha_mqtt()
     threading.Thread(target=ArpSpoofer().run, daemon=True).start()
-    server = await asyncio.start_server(handle_client, '0.0.0.0', LISTEN_PORT)
-    print(f"--- PowMr Autonomous Proxy 1.7.0 ACTIVE ---")
-    async with server: await server.serve_forever()
-
-if __name__ == "__main__": asyncio.run(main())
+    while not INV_MAC or not ROUTER_MAC: time.sleep(1)
+    print(f"--- PowMr Full L2 Bridge 1.8.0 ACTIVE ---")
+    sniff(filter=f"ip host {INVERTER_IP}", prn=packet_callback, store=0)
