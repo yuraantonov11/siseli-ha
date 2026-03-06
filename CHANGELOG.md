@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.0] - 2026-03-05
+### Added
+- **Transparent Proxy Mode**: Implemented a duplicator that forwards inverter traffic to Siseli Cloud while parsing data for Home Assistant.
+- Fixed packet loss issue where HA would drop forwarded traffic due to read-only `ip_forward`.
+- Dual-path data flow: Inverter -> HA (Proxy) -> Siseli Cloud.
+
 ## [1.5.1] - 2026-03-05
 ### Fixed
 - Improved JSON payload detection in TCP packets (robust against MQTT headers).

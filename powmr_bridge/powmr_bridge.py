@@ -8,7 +8,7 @@ import logging
 import os
 import paho.mqtt.client as mqtt
 from datetime import datetime
-from scapy.all import ARP, Ether, sendp, getmacbyip, conf, sniff, IP, TCP, Raw
+from scapy.all import ARP, Ether, sendp, getmacbyip
 
 # Silence warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -23,18 +23,10 @@ HA_PASS = os.getenv('MQTT_PASSWORD', '')
 
 INVERTER_IP = os.getenv('INVERTER_IP', '')
 ROUTER_IP = os.getenv('ROUTER_IP', '')
+LISTEN_PORT = 18899
 
 DEVICE_ID = "powmr_rwb1"
 STATE_TOPIC = f"powmr/{DEVICE_ID}/state"
-
-def get_best_iface():
-    try:
-        import subprocess
-        out = subprocess.check_output("ip route | grep default", shell=True).decode()
-        return out.split()[4]
-    except: return "enp0s3"
-
-conf.iface = get_best_iface()
 
 # --- MQTT ---
 ha_client = mqtt.Client()
@@ -88,10 +80,8 @@ class SolarParser:
     @staticmethod
     def parse_payload(payload_bytes):
         try:
-            # More robust search for JSON
             idx = payload_bytes.find(b'{"b":')
             if idx == -1: return
-            
             raw_json = json.loads(payload_bytes[idx:].decode('utf-8', errors='ignore'))
             state = {}
             if "b" in raw_json and "ct" in raw_json["b"]:
@@ -123,18 +113,42 @@ class SolarParser:
                         state["bat_temp"] = r[41]
             if state:
                 ha_client.publish(STATE_TOPIC, json.dumps(state))
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] ➡️ Data captured: {len(state)} params.")
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] ➡️ Data duplicated to HA: {len(state)} params.")
         except: pass
 
-# --- SNIFFER ---
-def packet_callback(packet):
-    if packet.haslayer(Raw):
-        SolarParser.parse_payload(packet[Raw].load)
+# --- TRANSPARENT PROXY (DUPLICATOR) ---
+async def forward_stream(reader, writer, is_inverter=False):
+    """Пересилає байти з одного кінця в інший. Якщо це інвертор - паралельно парсимо дані."""
+    try:
+        while True:
+            data = await reader.read(8192)
+            if not data: break
+            
+            if is_inverter:
+                SolarParser.parse_payload(data) # Дублюємо дані для HA
+                
+            writer.write(data) # Відправляємо оригінальний пакет далі (в хмару або інвертору)
+            await writer.drain()
+    except Exception: pass
+    finally: 
+        writer.close()
 
-def start_sniffer():
-    print(f"[SNIFFER] Monitoring {conf.iface} for traffic from {INVERTER_IP}...")
-    # More relaxed filter to catch redirected traffic too
-    sniff(iface=conf.iface, prn=packet_callback, filter=f"ip src {INVERTER_IP}", store=0)
+async def client_connected(inverter_reader, inverter_writer):
+    """Коли інвертор підключається до нашого сервера, ми підключаємось до Китаю і з'єднуємо їх."""
+    print(f"[PROXY] Inverter connected! Establishing link to Siseli Cloud ({TARGET_HOST})...")
+    try:
+        cloud_reader, cloud_writer = await asyncio.open_connection(TARGET_HOST, 1883)
+        print("[PROXY] Link to Cloud established. Duplicating traffic.")
+        
+        # Двостороння пересилка
+        await asyncio.gather(
+            forward_stream(inverter_reader, cloud_writer, is_inverter=True), # Inverter -> Cloud
+            forward_stream(cloud_reader, inverter_writer, is_inverter=False) # Cloud -> Inverter
+        )
+    except Exception as e: 
+        print(f"[PROXY] Connection error: {e}")
+    finally: 
+        inverter_writer.close()
 
 # --- ARP SPOOFER ---
 class ArpSpoofer:
@@ -154,13 +168,16 @@ class ArpSpoofer:
             time.sleep(2)
 
 # --- MAIN ---
-if __name__ == "__main__":
+async def main():
     if INVERTER_IP and ROUTER_IP:
         threading.Thread(target=ArpSpoofer(INVERTER_IP, ROUTER_IP).run, daemon=True).start()
-        threading.Thread(target=start_sniffer, daemon=True).start()
     
     connect_ha_mqtt()
-    print("--- PowMr Bridge 1.5.1 ACTIVE ---")
-    while True:
-        publish_discovery()
-        time.sleep(300)
+    
+    proxy_server = await asyncio.start_server(client_connected, '0.0.0.0', LISTEN_PORT)
+    print(f"--- PowMr Duplicator 1.6.0 ACTIVE (Port {LISTEN_PORT}) ---")
+    async with proxy_server:
+        await proxy_server.serve_forever()
+
+if __name__ == "__main__":
+    asyncio.run(main())
