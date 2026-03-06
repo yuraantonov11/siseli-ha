@@ -8,7 +8,7 @@ import logging
 import warnings
 import paho.mqtt.client as mqtt
 from datetime import datetime
-from scapy.all import sniff, ARP, Ether, sendp, getmacbyip, IP, TCP, Raw
+from scapy.all import sniff, ARP, Ether, sendp, getmacbyip, IP, TCP, Raw, UDP
 
 # Silence warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -128,25 +128,36 @@ class ArpSpoofer:
             sendp(Ether(dst=ROUTER_MAC)/ARP(op=2, pdst=ROUTER_IP, psrc=INVERTER_IP, hwdst=ROUTER_MAC), verbose=False)
             time.sleep(2)
 
-# --- L2 BRIDGE ---
+# --- ПРОГРАМНИЙ L2-МАРШРУТИЗАТОР ---
 def packet_callback(pkt):
     if not IP in pkt or not Ether in pkt: return
-    src_mac, src_ip, dst_ip = pkt[Ether].src, pkt[IP].src, pkt[IP].dst
+    
+    src_mac = pkt[Ether].src
+    src_ip = pkt[IP].src
+    dst_ip = pkt[IP].dst
 
-    # 1. Packet FROM Inverter
+    # --- РЕНТГЕН: Логуємо абсолютно весь трафік інвертора ---
+    if src_ip == INVERTER_IP or dst_ip == INVERTER_IP:
+        proto = "TCP" if TCP in pkt else ("UDP" if UDP in pkt else "OTHER")
+        port = f":{pkt[TCP].dport}" if TCP in pkt else ""
+        print(f"🔍 [X-RAY] {src_ip} ({src_mac}) ---> {dst_ip}{port} [{proto}]")
+
+    # 1. Пакет йде ВІД Інвертора
     if src_ip == INVERTER_IP and src_mac == INV_MAC:
-        # Catch MQTT for HA
+        # Якщо це наш цільовий MQTT пакет - парсимо для Home Assistant
         if TCP in pkt and pkt[TCP].dport == 1883 and dst_ip == TARGET_HOST:
             if Raw in pkt:
                 payload = pkt[Raw].load
                 if len(payload) > 0 and (payload[0] & 0xF0) == 0x30:
                     SolarParser.parse_payload(payload)
-        # Forward everything else to Router
+                    
+        # ПРОПУСКАЄМО пакет на справжній роутер
         fwd_pkt = Ether(dst=ROUTER_MAC) / pkt[IP]
         sendp(fwd_pkt, verbose=False)
         
-    # 2. Packet TO Inverter (from Router/Cloud)
+    # 2. Відповідь повертається ДО Інвертора (від роутера або хмари)
     elif dst_ip == INVERTER_IP and src_mac == ROUTER_MAC:
+        # Віддаємо пакет інвертору
         fwd_pkt = Ether(dst=INV_MAC) / pkt[IP]
         sendp(fwd_pkt, verbose=False)
 
